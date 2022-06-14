@@ -1,0 +1,207 @@
+#!/bin/bash
+#
+# RECON SCRIPT
+#
+# goal: run basic recon tools like nmap and gobuster to simplify and expedite recon process for pen-testers. 
+
+###########
+# Globals #
+###########
+
+function has-space(){ # Fail Check
+	[[ "$var" != "${1%[[:space:]]*}" ]] && return 0 || return 1
+}
+function invalidchoice(){ # Error Message
+	echo -e "\e[31m// Invalid Choice. Please Enter a Valid Choice\e[0m"
+}
+
+######################
+# GoBuster Functions #
+######################
+
+# 6 #
+
+function gobust_(){ #GoBuster
+		echo -e "\e[33mWould you like to run a gobuster directory search? [y/N]\e[0m"	#Go_Buster choice
+		read gobus_yn
+		if [[ $gobus_yn == y ]] || [[ $gobus_yn == Y  ]]; then 
+			echo "please list the path of the directory and wordlist you would like to use:"
+			read userwl #if no wordlist is defined, the default wordlist will be used (common.txt).
+			wordlist= $userwl
+			gobust_choice
+		elif [[ $gobus_yn == n ]] || [[ $gobus_yn == N ]]; then
+			echo "// Exiting Script..."
+		else 
+			invalidchoice
+			gobust_yn
+		fi
+}
+
+# 5 # 
+
+function gobust_choice(){ #GoBuster for directory and subdomain enumeration
+	echo -e "\e[34m// Would you like to run a Directory or DNS enumeration?"
+	echo "// 1.) Directory"
+	echo -e "// 2.) DNS\e[0m"
+	read -n1 usr_busts 
+	if [[ $usr_busts == 1  ]]; then
+		gobuster dir -u $domain -w $userwl -o $file_name
+	elif [[ $usr_busts == 2  ]]; then
+		gobuster dns -u domain -w $userwl -o $file_name
+	else
+		invalidchoice
+		gobust_choice
+	fi
+}
+
+########################################
+# DNS resolver + writing to /etc/hosts #
+########################################
+
+# 4 #
+function asktomove(){
+		echo -e "\e[33m// Would you like to copy the hosts file back to /etc/?\e[0m"
+		read -s -n1 move_yn
+
+		if [[ $move_yn == y ]] || [[ $move_yn == Y ]]; then
+			echo "// Moving" $PWD"/hosts back to /etc/"
+			sudo cp -f $PWD/hosts /etc/
+			echo "// Removing hosts file from" $PWD
+			rm $PWD/hosts
+		elif [[ $move_yn == n ]] || [[ $move_n == N ]]; then
+			echo "// Error: hosts file not moved"
+			echo "// Removing hosts file from " $PWD
+			rm $PWD/hosts
+			echo "// Exiting Script..."
+		else
+			invalidchoice
+			asktomove
+
+		fi
+}
+
+# 3 #
+function writetohosts(){ #Check to see if HTML ports are open in NMAP first!!!
+	echo -e "\e[33mIt looks like port 80 is open, would you like to Resolve DNS in /etc/hosts? [y/N]\e[0m" 
+	read -s -n1 dns_yn
+	echo
+	if [[ $dns_yn == y ]] || [[ $dns_yn == Y ]]; then # If the user continues, write the file to hosts and continue to GoBust_()
+		# WRITING TO /ETC/HOSTS 
+		echo -e "\e[34m// Copying /etc/hosts file to current directory\e[0m"
+		cp /etc/hosts $PWD
+		echo -e "\e[33m// Please Enter the DNS name resolve:\e[0m"
+		read domain
+		echo -e "\e[34m// Writing Domain to hosts file...\e[0m"
+		echo -e "# $domain \n$target_ip $domain" >> $PWD/hosts
+		echo -e "\e[32m // Current hosts file in $PWD:\e[0m"
+		echo -e "\n===============================\n"
+		cat $PWD/hosts
+	
+		echo -e "\n===============================\n"	
+		asktomove
+	elif [[ $dns_yn == n  ]] || [[ $dns_yn == N ]]; then #If the user declines, end the script since essential variables can't be defined 
+		echo -e "\e[31m// Error: Script Cannot Continue; (missing variables)"
+		echo -e "// Exiting script...\e[0m"
+	else
+		invalidchoice
+		writetohosts
+	fi
+}
+
+############################
+# Basic Enumeration (NMAP) #
+############################
+
+# 2 #
+function ping_test(){
+	echo -e "\e[34m// Running Ping Test...\e[0m" 
+	ping -c 3 $target_ip >> $directory/$file_name.ping #STDIN to file name
+	echo -e "\e[34m// writing to:\e[0m \e[32m$directory\e[0m"
+	if [[ $( cat $directory/$file_name.ping | grep -c '0 received') -ne 1 ]]; then #if there is no instance of 0 packets received
+		echo -e "\e[34m// Running NMAP (-sV -sC) scan...\e[0m"
+		echo -e "\e[34m// Making directory\e[0m \e[32m$directory\e[0m/nmap"
+		mkdir $directory/nmap
+		nmap -sV -sC $target_ip -oA $directory/nmap/$file_name
+		echo -e "\e[34m// writing to:\e[0m \e[32m$directory\e[0m/nmap/\e[32m$file_name\e[0m"
+		sleep 1
+		if [[ $(cat $directory/nmap/$file_name.nmap | grep -c "80/tcp") == 1 ]] || [[ $(cat $directory/nmap/$file_name.nmap | grep -c "443/tcp")  ]] && [[ $( cat $directory/nmap/$file_name'.nmap'| grep -c "open") -ge 1 ]]; then
+			writetohosts
+		else
+			echo -e "\e[31m// port 80/443 not detected."
+			echo -e "// Exiting script\e[0m"
+		fi
+	else #if there IS an instance of 0 packets received (unable to connect to host)
+		echo -e "\e[31m// Ping Test failed; Host is Unreachable"
+		echo -e "// Exiting script...\e[0m"
+	fi
+}
+# 1 #
+function main(){ # Starting point 
+	echo -e "\e[34m// OUTPUT DIRECTORY=\e[0m \e[32m$directory\e[0m"
+	echo -e "\e[33m// Please enter the name of the output files (*.ping *.nmap):\e[0m" #Name ALL of the files with $file_name
+	read file_name
+	var=$file_name
+
+	# Fail Check #
+
+	if has-space $file_name || [[ $file_name = "" ]];then
+		echo -e "\e[31m// Error: File name contains a bad character, please re-enter your file name" 
+		main
+	else
+		ping_test
+	fi
+}
+
+############################
+# Writing to new directory #
+############################
+function newdirectory(){
+	echo "// Enter the directory name: "
+	read userdir
+ 	var=$userdir	
+
+	# Fail Check #
+	if has-space $userdir || [[ $userdir = "" ]]; then
+		echo -e "\e[31m// Error: Directory contains a bad character, please re-enter your directory\e[0m"
+		newdirectory
+	else
+		mkdir $PWD/$userdir
+		directory=$PWD/$userdir
+		main
+
+	fi
+}
+
+function askfornewdirectory(){
+	echo -e "\e[34m// would you like to create a new directory for the outputs? [y/N]\e[0m" #Create A New Directory
+	read -s -n1 dir_yn
+
+	if [[ $dir_yn == y  ]] || [[ $dir_yn == Y ]]; then 
+		newdirectory
+	elif [[ $dir_yn == N ]] || [[ $dir_yn == n ]]; then
+		echo -e "\e[34m// Writing Files to Current Directory...\e[0m"
+		directory=$PWD
+		main
+	else
+		invalidchoice
+		askfornewdirectory
+	fi
+}
+
+################
+# Targeting IP #
+################
+
+echo -e "\e[34m================================="
+echo "=..........//Ez_Recon//.........="
+echo "=.Written By: [westwardfishdme].="
+echo -e "=================================\e[0m"
+echo -e "\e[33m// Target IP:\e[0m"
+read target_ip #User inputs Target IP address
+
+if [[ $target_ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3} ]]; then
+	echo -e "\e[34m// IP address:\e[0m \e[32m$target_ip\e[0m"
+	askfornewdirectory
+else
+	echo -e "\e[31m// Invalid ip, exiting script...\e[0m"
+fi
